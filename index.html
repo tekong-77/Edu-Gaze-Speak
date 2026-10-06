@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edu-Gaze & Speak - Versi Multimodal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f0fdf4; }
+        .word-normal { color: #94a3b8; transition: all 0.3s ease; }
+        .word-highlight { 
+            color: #0f172a; 
+            font-weight: 800; 
+            background-color: #fde047; 
+            padding: 4px 8px; 
+            border-radius: 6px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+            border-bottom: 3px solid #eab308;
+            font-size: 1.1em;
+        }
+        .word-read { color: #22c55e; font-weight: 600; text-decoration: underline; text-decoration-color: #bbf7d0; text-underline-offset: 4px;}
+        .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+        #input_video, #output_canvas { transform: scaleX(-1); }
+        
+        /* Soft blur instead of aggressive red */
+        .soft-blur-overlay {
+            backdrop-filter: blur(12px) grayscale(0.5);
+            background-color: rgba(255, 255, 255, 0.6);
+            transition: all 0.5s ease-in-out;
+        }
+
+        /* Pet Animation */
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .pet-happy { animation: bounce 1s infinite; font-size: 3rem; }
+        .pet-sleep { font-size: 3rem; opacity: 0.7; filter: grayscale(1); }
+        
+        /* Modal Calibration */
+        #calib-modal { transition: opacity 0.3s ease; }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-6 text-gray-800 flex flex-col">
+
+    <header class="bg-white rounded-2xl shadow-sm border border-emerald-100 p-4 mb-6 flex justify-between items-center">
+        <div class="flex items-center gap-4">
+            <div class="bg-gradient-to-r from-emerald-500 to-teal-500 text-white p-3 rounded-xl shadow-md">
+                <i class="fa-solid fa-graduation-cap fa-xl"></i>
+            </div>
+            <div>
+                <h1 class="text-2xl font-extrabold text-gray-800 tracking-tight">Edu-Gaze <span class="text-emerald-500">& Speak</span></h1>
+                <p class="text-xs text-gray-500 font-bold tracking-widest uppercase">Penilaian Visi & Suara Multimodal</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-3">
+            <div id="status-ai" class="flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                <i class="fa-solid fa-spinner fa-spin"></i> Memuatkan Model AI...
+            </div>
+            <div id="status-mic" class="flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200">
+                <i class="fa-solid fa-microphone-slash"></i> Mikrofon Mati
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 relative">
+        
+        <div class="lg:col-span-4 flex flex-col gap-6">
+            
+            <div class="bg-white rounded-2xl shadow-sm border border-emerald-100 p-4 flex items-center gap-4 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-16 h-16 bg-blue-50 rounded-bl-full -z-10"></div>
+                <img src="https://ui-avatars.com/api/?name=Ahmad+Ali&background=0D8ABC&color=fff&rounded=true" alt="Pelajar" class="w-12 h-12 rounded-full border-2 border-white shadow-md">
+                <div>
+                    <h3 class="font-bold text-gray-800 text-sm">Ahmad Ali bin Abu</h3>
+                    <p class="text-xs text-gray-500 font-medium">Tahun 3 Gemilang • ID: P-4029</p>
+                </div>
+                <div class="ml-auto">
+                    <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider">Pemulihan</span>
+                </div>
+            </div>
+
+            <!-- Video & Validation Container -->
+            <div class="bg-white rounded-2xl shadow-sm border border-emerald-100 p-4">
+                
+                <div class="relative rounded-xl bg-slate-900 aspect-video flex items-center justify-center overflow-hidden border-4 border-slate-800 shadow-inner" id="video-container">
+                    <video id="input_video" class="absolute w-full h-full object-cover hidden" playsinline></video>
+                    <canvas id="output_canvas" class="w-full h-full object-cover"></canvas>
+                    
+                    <!-- Multimodal Indicators -->
+                    <div class="absolute bottom-3 left-3 flex flex-col gap-2">
+                        <div class="bg-black/70 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold backdrop-blur-md border border-white/10 flex items-center gap-2">
+                            <i class="fa-solid fa-eye text-blue-400"></i> Fokus:
+                            <span id="badge-focus" class="text-red-400">TIDAK</span>
+                        </div>
+                        <div class="bg-black/70 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold backdrop-blur-md border border-white/10 flex items-center gap-2">
+                            <i class="fa-solid fa-lips text-pink-400"></i> Mulut:
+                            <span id="badge-mouth" class="text-pink-200">TUTUP</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Audio Decibel Meter -->
+                    <div class="absolute right-3 top-3 bottom-3 w-4 bg-black/50 rounded-full overflow-hidden backdrop-blur-md border border-white/10 flex flex-col justify-end p-0.5">
+                        <div id="audio-meter" class="w-full bg-gradient-to-t from-green-500 via-yellow-400 to-red-500 rounded-full transition-all duration-75" style="height: 0%;"></div>
+                    </div>
+                </div>
+
+                <div class="mt-4 flex gap-2">
+                    <button id="btn-calibrate" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl text-sm font-bold transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2" disabled>
+                        <i class="fa-solid fa-sliders"></i> Kalibrasi Sistem
+                    </button>
+                    <button id="btn-start" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-bold transition shadow-md hidden flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-play"></i> Mula Bacaan
+                    </button>
+                    <button id="btn-end" class="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-xl text-sm font-bold transition shadow-md hidden flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-stop"></i> Tamat
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl shadow-sm border border-emerald-100 p-5 flex items-center gap-4">
+                <div class="w-20 h-20 bg-emerald-50 rounded-2xl border-2 border-emerald-200 flex items-center justify-center shadow-inner">
+                    <div id="pet-emoji" class="pet-sleep">😺</div>
+                </div>
+                <div class="flex-1">
+                    <h3 class="font-bold text-gray-700 text-sm mb-1">Rakan Membaca (Oyen)</h3>
+                    <div class="w-full bg-gray-200 rounded-full h-3 mb-1 shadow-inner overflow-hidden">
+                        <div id="pet-energy" class="bg-gradient-to-r from-emerald-400 to-green-500 h-3 rounded-full transition-all duration-300" style="width: 50%"></div>
+                    </div>
+                    <p class="text-[10px] text-gray-500 font-bold uppercase" id="pet-status">Oyen sedang berehat.</p>
+                </div>
+            </div>
+
+            <!-- Dashboard -->
+            <div class="bg-white rounded-2xl shadow-sm border border-emerald-100 p-4 flex-1">
+                <h2 class="font-bold text-gray-700 mb-4 text-sm uppercase tracking-wide border-b pb-2">Analitik Semasa</h2>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 text-center">
+                        <p class="text-[10px] text-slate-500 font-bold uppercase">Kemajuan</p>
+                        <p class="text-xl font-black text-slate-800 mt-1" id="metric-progress">0/0</p>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 text-center">
+                        <p class="text-[10px] text-slate-500 font-bold uppercase">Validasi Suara</p>
+                        <p class="text-xl font-black text-slate-800 mt-1" id="metric-voice">0</p>
+                    </div>
+                    <div class="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-center col-span-2 relative overflow-hidden">
+                        <p class="text-[10px] text-emerald-600 font-bold uppercase">Skor Fokus</p>
+                        <p class="text-2xl font-black text-emerald-700 mt-1" id="metric-focus">0%</p>
+                        <div class="absolute bottom-0 left-0 h-1.5 bg-emerald-500 transition-all duration-300" id="bar-focus" style="width: 0%;"></div>
+                    </div>
+                </div>
+                
+                <div class="mt-4 border-t pt-4">
+                    <p class="text-[10px] text-slate-500 font-bold uppercase mb-2 flex items-center gap-1">
+                        <i class="fa-solid fa-robot text-blue-400"></i> Diagnosis AI (Auto-Jana)
+                    </p>
+                    <div id="diagnostic-result" class="text-xs font-medium text-gray-500 italic bg-gray-50 p-3 rounded-xl border border-dashed border-gray-300">
+                        Menunggu sesi dilengkapkan untuk menjana laporan diagnosis...
+                    </div>
+                </div>
+
+                <div class="mt-4 text-[9px] font-mono text-gray-400 bg-gray-900 p-2 rounded-lg h-24 overflow-y-auto" id="debug-log">
+                    > Sistem dimulakan...
+                </div>
+            </div>
+        </div>
+
+        <div class="lg:col-span-8 flex flex-col gap-6">
+            <div class="bg-white rounded-2xl shadow-sm border border-emerald-100 flex-1 flex flex-col overflow-hidden relative">
+                
+                <div class="bg-emerald-50/50 p-4 border-b border-emerald-100 flex justify-between items-center">
+                    <h2 class="font-bold text-emerald-800 flex items-center gap-2">
+                        <i class="fa-solid fa-book-open text-emerald-600"></i> Modul Membaca Berpandukan Suara
+                    </h2>
+                    <div class="text-xs font-bold px-3 py-1 bg-white border border-gray-200 text-gray-500 rounded-full shadow-sm">
+                        Sebut perkataan berkotak kuning.
+                    </div>
+                </div>
+                
+                <div class="p-8 md:p-12 flex-1 bg-white relative">
+                    
+                    <!-- Soft Blur Overlay for Lost Focus -->
+                    <div id="overlay-unfocused" class="absolute inset-0 soft-blur-overlay flex flex-col items-center justify-center z-10 flex-col gap-4 opacity-100">
+                        <div class="bg-white p-6 rounded-2xl shadow-xl text-center max-w-sm border-2 border-indigo-100 transform transition-transform scale-100" id="overlay-card">
+                            <div class="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <i class="fa-solid fa-eye-slash text-2xl text-indigo-600"></i>
+                            </div>
+                            <h3 class="font-extrabold text-gray-800 text-xl">Sistem Dijeda</h3>
+                            <p class="text-gray-500 text-sm mt-2 font-medium">Sila pandang tepat ke arah kamera dan bersedia untuk membaca.</p>
+                            <div class="mt-4 text-xs bg-indigo-50 text-indigo-700 px-3 py-2 rounded-lg font-bold">
+                                Petunjuk: Kucing Oyen sedang tidur.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Reading Content -->
+                    <div id="reading-container" class="text-2xl md:text-4xl leading-[2.5] md:leading-[2.5] text-center font-medium font-serif">
+                        <!-- Words injected via JS -->
+                    </div>
+                </div>
+                
+                <!-- Live Subtitles / Speech Recognition Feedback -->
+                <div class="bg-slate-800 text-white p-4 flex items-center justify-center gap-3 min-h-[60px]">
+                    <i class="fa-solid fa-ear-listen text-emerald-400 animate-pulse"></i>
+                    <p id="speech-feedback" class="font-mono text-sm text-gray-300">Sistem sedia mendengar...</p>
+                </div>
+            </div>
+        </div>
+
+        <div id="calib-modal" class="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm hidden flex items-center justify-center p-4">
+            <div class="bg-white rounded-3xl max-w-md w-full p-8 shadow-2xl flex flex-col items-center text-center">
+                <div class="w-20 h-20 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-3xl mb-6 shadow-inner">
+                    <i class="fa-solid fa-face-smile"></i>
+                </div>
+                <h2 class="text-2xl font-extrabold text-gray-800 mb-2">Kalibrasi Wajah</h2>
+                <p class="text-gray-500 mb-8 text-sm font-medium">Sistem perlu mengenali struktur unik mulut anda untuk ketepatan maksimum.</p>
+                
+                <div class="w-full bg-slate-100 p-6 rounded-2xl mb-8 relative overflow-hidden">
+                    <p id="calib-instruction" class="text-lg font-bold text-indigo-700">Tutup mulut dan diam.</p>
+                    <p id="calib-countdown" class="text-4xl font-black text-gray-800 mt-2">3</p>
+                    <div class="absolute bottom-0 left-0 h-1 bg-indigo-500 transition-all duration-100" id="calib-progress" style="width: 0%"></div>
+                </div>
+                
+                <button id="btn-start-calib" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-bold shadow-lg transition">
+                    Mula Kalibrasi
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // --- State Variables ---
+        let isAIReady = false;
+        let isSessionActive = false;
+        let calibrationData = { minAperture: 0, maxAperture: 0, threshold: 0, isCalibrated: false };
+        let metrics = { totalTicks: 0, focusTicks: 0, voiceValidations: 0, petEnergy: 50 };
+        let currentFocus = false;
+        let isMouthOpen = false;
+        let audioVolume = 0;
+        let sessionStartTime = null; // Variable baharu untuk track masa
+        
+        // --- Reading Data ---
+        const rawText = "Inovasi teknologi pendidikan masa kini sangat penting. Ia membantu pelajar belajar dengan lebih berkesan. Kita mesti bersedia untuk masa hadapan.";
+        const words = rawText.split(' ').map(w => w.trim());
+        const cleanWords = words.map(w => w.toLowerCase().replace(/[^\w\s]|_/g, "")); // Array for matching without punctuation
+        let currentWordIndex = 0;
+        
+        // --- DOM Elements ---
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const debugLog = document.getElementById('debug-log');
+        
+        // UI
+        const calibModal = document.getElementById('calib-modal');
+        const overlayUnfocused = document.getElementById('overlay-unfocused');
+        const overlayCard = document.getElementById('overlay-card');
+        const readingContainer = document.getElementById('reading-container');
+        const speechFeedback = document.getElementById('speech-feedback');
+        const audioMeter = document.getElementById('audio-meter');
+        const petEmoji = document.getElementById('pet-emoji');
+        const petEnergyBar = document.getElementById('pet-energy');
+        const petStatus = document.getElementById('pet-status');
+        
+        // Buttons
+        const btnCalibrate = document.getElementById('btn-calibrate');
+        const btnStartCalib = document.getElementById('btn-start-calib');
+        const btnStart = document.getElementById('btn-start');
+        const btnEnd = document.getElementById('btn-end');
+        
+        // --- Helpers ---
+        function log(msg) {
+            debugLog.innerHTML += `<br>> ${msg}`;
+            debugLog.scrollTop = debugLog.scrollHeight;
+        }
+
+        function calculateDistance(p1, p2) {
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+        }
+
+        // --- Initialize Text ---
+        function initText() {
+            readingContainer.innerHTML = '';
+            words.forEach((word, index) => {
+                const span = document.createElement('span');
+                span.textContent = word + ' ';
+                span.className = index === 0 ? 'word-highlight' : 'word-normal';
+                span.id = `word-${index}`;
+                readingContainer.appendChild(span);
+            });
+            document.getElementById('metric-progress').textContent = `0/${words.length}`;
+        }
+
+        let audioContext;
+        let analyser;
+        let speechRecognition;
+        let dataArray;
+        
+        async function setupAudio() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                
+                // 1. Audio Decibel Analysis
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                const microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                analyser.fftSize = 256;
+                const bufferLength = analyser.frequencyBinCount;
+                dataArray = new Uint8Array(bufferLength);
+                
+                document.getElementById('status-mic').className = "flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200";
+                document.getElementById('status-mic').innerHTML = '<i class="fa-solid fa-microphone"></i> Audio Aktif';
+                
+                // 2. Speech-to-Text Setup
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if(SpeechRecognition) {
+                    speechRecognition = new SpeechRecognition();
+                    speechRecognition.continuous = true;
+                    speechRecognition.interimResults = true;
+                    speechRecognition.lang = 'ms-MY';
+                    
+                    speechRecognition.onresult = handleSpeechResult;
+                    speechRecognition.onend = () => {
+                        if(isSessionActive) speechRecognition.start(); // Keep listening
+                    };
+                } else {
+                    log("Pelayar tidak menyokong Web Speech API.");
+                }
+
+                audioLoop(); // Start visualizer
+            } catch (err) {
+                log("Ralat Mikrofon: " + err);
+            }
+        }
+
+        function audioLoop() {
+            requestAnimationFrame(audioLoop);
+            if(analyser && dataArray) {
+                analyser.getByteFrequencyData(dataArray);
+                // Calculate average volume
+                let sum = 0;
+                for(let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+                audioVolume = sum / dataArray.length;
+                
+                // Update meter visually (max volume ~100)
+                const heightPct = Math.min(100, (audioVolume / 100) * 100);
+                audioMeter.style.height = `${heightPct}%`;
+            }
+        }
+
+        function handleSpeechResult(event) {
+            if(!isSessionActive || !currentFocus) return;
+
+            let interimTranscript = '';
+            let finalTranscript = '';
+
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    finalTranscript += event.results[i][0].transcript;
+                } else {
+                    interimTranscript += event.results[i][0].transcript;
+                }
+            }
+
+            const currentSpoken = (finalTranscript || interimTranscript).toLowerCase().trim();
+            speechFeedback.textContent = `Mendengar: "${currentSpoken}"`;
+
+            // Check if spoken text contains the current target word
+            if(currentWordIndex < words.length) {
+                const targetWord = cleanWords[currentWordIndex];
+                
+                // Multi-modal check: Spoken correctly AND (mouth is open OR audio is loud enough)
+                const isWordMatch = currentSpoken.includes(targetWord);
+                const isPhysicallySpeaking = isMouthOpen && audioVolume > 10; // >10 is a low threshold for speech
+                
+                if (isWordMatch && isPhysicallySpeaking) {
+                    advanceWord();
+                    metrics.voiceValidations++;
+                    document.getElementById('metric-voice').textContent = metrics.voiceValidations;
+                    
+                    // Add extra pet energy for valid speaking
+                    metrics.petEnergy = Math.min(100, metrics.petEnergy + 5); 
+                }
+            }
+        }
+
+        function advanceWord() {
+            // Update UI for previous word
+            const prevSpan = document.getElementById(`word-${currentWordIndex}`);
+            prevSpan.className = 'word-read';
+            
+            currentWordIndex++;
+            document.getElementById('metric-progress').textContent = `${currentWordIndex}/${words.length}`;
+            
+            if (currentWordIndex < words.length) {
+                // Highlight next word
+                const nextSpan = document.getElementById(`word-${currentWordIndex}`);
+                nextSpan.className = 'word-highlight';
+                nextSpan.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else {
+                // Done
+                endSession();
+                alert("Tahniah! Anda telah melengkapkan bacaan dengan cemerlang.");
+            }
+        }
+
+        function onResults(results) {
+            if (!isAIReady) {
+                isAIReady = true;
+                document.getElementById('status-ai').className = "flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200";
+                document.getElementById('status-ai').innerHTML = '<i class="fa-solid fa-check-circle"></i> AI Sedia';
+                btnCalibrate.disabled = false;
+                setupAudio(); // Init audio once camera is ready
+                log("Face Mesh dimuatkan.");
+            }
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            currentFocus = false;
+            let currentAperture = 0;
+
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const landmarks = results.multiFaceLandmarks[0];
+                
+                // Draw Mesh lightly
+                drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELATION, {color: '#ffffff30', lineWidth: 0.5});
+                drawConnectors(canvasCtx, landmarks, FACEMESH_LIPS, {color: '#f472b6', lineWidth: 2}); // Highlight lips
+
+                // 1. FOCUS DETECTION (Heuristic: Nose in center area + Eyes visible)
+                const nose = landmarks[1];
+                const leftEye = landmarks[159]; // top of left eye
+                const rightEye = landmarks[386]; // top of right eye
+                
+                if (nose && nose.x > 0.3 && nose.x < 0.7 && nose.y > 0.2 && nose.y < 0.8) {
+                    // Check if eyes are open (basic distance check between eyelids)
+                    const leftEyeOpen = calculateDistance(landmarks[159], landmarks[145]) > 0.01;
+                    const rightEyeOpen = calculateDistance(landmarks[386], landmarks[374]) > 0.01;
+                    
+                    if(leftEyeOpen && rightEyeOpen) {
+                        currentFocus = true;
+                    }
+                }
+
+                // 2. MOUTH APERTURE
+                const upperLip = landmarks[13];
+                const lowerLip = landmarks[14];
+                const faceTop = landmarks[10];
+                const faceBottom = landmarks[152];
+                
+                currentAperture = calculateDistance(upperLip, lowerLip) / calculateDistance(faceTop, faceBottom);
+                
+                // Compare to dynamic threshold if calibrated
+                if(calibrationData.isCalibrated) {
+                    isMouthOpen = currentAperture > calibrationData.threshold;
+                }
+            }
+            
+            updateIndicators(currentAperture);
+            if(isSessionActive) processGameLoop();
+
+            canvasCtx.restore();
+        }
+
+        function updateIndicators(aperture) {
+            const bFocus = document.getElementById('badge-focus');
+            if(currentFocus) {
+                bFocus.textContent = "YA";
+                bFocus.className = "text-emerald-400";
+            } else {
+                bFocus.textContent = "TIDAK";
+                bFocus.className = "text-red-400";
+            }
+
+            const bMouth = document.getElementById('badge-mouth');
+            if(calibrationData.isCalibrated && isMouthOpen) {
+                bMouth.textContent = "BUKA";
+                bMouth.className = "text-pink-400";
+            } else {
+                bMouth.textContent = "TUTUP";
+                bMouth.className = "text-pink-200/50";
+            }
+        }
+
+        let lastTime = 0;
+        function processGameLoop() {
+            metrics.totalTicks++;
+            
+            if (currentFocus) {
+                metrics.focusTicks++;
+                metrics.petEnergy = Math.min(100, metrics.petEnergy + 0.5); // Regain energy
+                
+                overlayUnfocused.style.opacity = '0';
+                overlayUnfocused.style.pointerEvents = 'none';
+                overlayCard.style.transform = 'scale(0.9)';
+                
+                petEmoji.className = 'pet-happy';
+                petEmoji.textContent = '😺';
+                petStatus.textContent = "Oyen sedang fokus mendengar!";
+                petStatus.className = "text-[10px] font-bold uppercase text-emerald-600";
+            } else {
+                metrics.petEnergy = Math.max(0, metrics.petEnergy - 1); // Lose energy fast when not looking
+                
+                overlayUnfocused.style.opacity = '1';
+                overlayUnfocused.style.pointerEvents = 'auto';
+                overlayCard.style.transform = 'scale(1)';
+                
+                petEmoji.className = 'pet-sleep';
+                petEmoji.textContent = '💤';
+                petStatus.textContent = "Oyen tertidur... Sila fokus!";
+                petStatus.className = "text-[10px] font-bold uppercase text-red-500";
+            }
+
+            // Update UI elements every ~10 ticks to save DOM operations
+            if(metrics.totalTicks % 10 === 0) {
+                petEnergyBar.style.width = `${metrics.petEnergy}%`;
+                if(metrics.petEnergy < 30) petEnergyBar.className = "bg-red-500 h-3 rounded-full transition-all duration-300";
+                else if(metrics.petEnergy < 70) petEnergyBar.className = "bg-amber-400 h-3 rounded-full transition-all duration-300";
+                else petEnergyBar.className = "bg-gradient-to-r from-emerald-400 to-green-500 h-3 rounded-full transition-all duration-300";
+
+                const focusPct = Math.round((metrics.focusTicks / metrics.totalTicks) * 100);
+                document.getElementById('metric-focus').textContent = `${focusPct}%`;
+                document.getElementById('bar-focus').style.width = `${focusPct}%`;
+            }
+        }
+
+        let calibDataArray = [];
+        
+        btnCalibrate.addEventListener('click', () => {
+            calibModal.classList.remove('hidden');
+        });
+
+        btnStartCalib.addEventListener('click', async () => {
+            btnStartCalib.disabled = true;
+            const inst = document.getElementById('calib-instruction');
+            const count = document.getElementById('calib-countdown');
+            const prog = document.getElementById('calib-progress');
+            
+            // Phase 1: Closed Mouth
+            inst.textContent = "Tutup mulut dan diam...";
+            inst.className = "text-lg font-bold text-indigo-700";
+            await runCalibrationPhase(count, prog, 3000); // 3 seconds
+            
+            // Assuming current aperture from FaceMesh loop is stored globally, but since onResults runs async, 
+            // we simplify by taking the last known state. A robust system would average over the 3 seconds.
+            // For prototype simplicity, we just take the current snapshot after 3s.
+            const tempAperture = calculateDistance(
+                faceMeshResultsLast.multiFaceLandmarks[0][13], 
+                faceMeshResultsLast.multiFaceLandmarks[0][14]
+            ) / calculateDistance(
+                faceMeshResultsLast.multiFaceLandmarks[0][10], 
+                faceMeshResultsLast.multiFaceLandmarks[0][152]
+            );
+            calibrationData.minAperture = tempAperture;
+
+            // Phase 2: Open Mouth
+            inst.textContent = "Sebut 'AAAA' panjang...";
+            inst.className = "text-lg font-bold text-pink-600";
+            await runCalibrationPhase(count, prog, 3000);
+            
+            const tempApertureMax = calculateDistance(
+                faceMeshResultsLast.multiFaceLandmarks[0][13], 
+                faceMeshResultsLast.multiFaceLandmarks[0][14]
+            ) / calculateDistance(
+                faceMeshResultsLast.multiFaceLandmarks[0][10], 
+                faceMeshResultsLast.multiFaceLandmarks[0][152]
+            );
+            calibrationData.maxAperture = tempApertureMax;
+
+            // Calc threshold (e.g. 30% of the way between min and max)
+            calibrationData.threshold = calibrationData.minAperture + ((calibrationData.maxAperture - calibrationData.minAperture) * 0.3);
+            calibrationData.isCalibrated = true;
+            
+            log(`Kalibrasi Siap: Ambang=${calibrationData.threshold.toFixed(4)}`);
+            calibModal.classList.add('hidden');
+            
+            btnCalibrate.classList.add('hidden');
+            btnStart.classList.remove('hidden');
+        });
+
+        function runCalibrationPhase(countEl, progEl, durationMs) {
+            return new Promise(resolve => {
+                let start = Date.now();
+                let interval = setInterval(() => {
+                    let passed = Date.now() - start;
+                    let remain = Math.ceil((durationMs - passed) / 1000);
+                    countEl.textContent = remain > 0 ? remain : 0;
+                    progEl.style.width = `${(passed/durationMs)*100}%`;
+                    
+                    if(passed >= durationMs) {
+                        clearInterval(interval);
+                        resolve();
+                    }
+                }, 100);
+            });
+        }
+
+        // Keep a reference to latest results for calibration math
+        let faceMeshResultsLast = null;
+        const originalOnResults = onResults;
+        onResults = function(results) {
+            faceMeshResultsLast = results;
+            originalOnResults(results);
+        }
+
+        btnStart.addEventListener('click', () => {
+            isSessionActive = true;
+            sessionStartTime = Date.now(); // Mula rekod masa
+            metrics = { totalTicks: 0, focusTicks: 0, voiceValidations: 0, petEnergy: 100 };
+            currentWordIndex = 0;
+            initText();
+            
+            document.getElementById('diagnostic-result').innerHTML = `
+                <div class="flex items-center gap-2 text-blue-500">
+                    <i class="fa-solid fa-circle-notch fa-spin"></i> Menganalisis corak bacaan...
+                </div>`;
+            
+            if(speechRecognition) {
+                try { speechRecognition.start(); } catch(e){}
+            }
+            
+            btnStart.classList.add('hidden');
+            btnEnd.classList.remove('hidden');
+            log("Sesi bermula. Visi & Suara aktif.");
+        });
+
+        function endSession() {
+            isSessionActive = false;
+            if(speechRecognition) speechRecognition.stop();
+            
+            btnStart.classList.remove('hidden');
+            btnEnd.classList.add('hidden');
+            overlayUnfocused.style.opacity = '0'; // clear overlay
+            
+            // Pengiraan Metrik Akhir
+            const finalFocus = metrics.totalTicks > 0 ? Math.round((metrics.focusTicks / metrics.totalTicks) * 100) : 0;
+            const durationSec = (Date.now() - sessionStartTime) / 1000;
+            const wpm = Math.round(words.length / (durationSec / 60)); // Words per minute
+            
+            log(`Sesi tamat. Fokus: ${finalFocus}%, Validasi Suara: ${metrics.voiceValidations}, WPM: ${wpm}`);
+            
+            let issues = [];
+            
+            // Analisis 1: Isu Fokus
+            if (finalFocus < 50) {
+                issues.push({type: 'danger', icon: 'fa-eye-slash', text: 'Isu Fokus Kritikal: Pelajar sering terganggu dan mengalihkan pandangan. Kemungkinan trait defisit tumpuan (ADHD) atau persekitaran bising.'});
+            } else if (finalFocus < 75) {
+                issues.push({type: 'warning', icon: 'fa-triangle-exclamation', text: 'Tumpuan Tersekat-sekat: Fokus sekadar memuaskan, perlu pemantauan.'});
+            }
+
+            // Analisis 2: Isu Kelancaran
+            if (wpm < 20) {
+                if (finalFocus >= 75) {
+                    issues.push({type: 'danger', icon: 'fa-brain', text: 'Kesukaran Mengecam: Pelajar sangat fokus pada skrin tetapi mengambil masa terlalu lama untuk menyebut perkataan. Petunjuk awal Isu Disleksia/Kelancaran.'});
+                } else {
+                    issues.push({type: 'warning', icon: 'fa-stopwatch', text: 'Kelajuan Membaca Lambat (WPM Rendah).'});
+                }
+            }
+
+            // Render Output Diagnosis
+            let diagHtml = '';
+            if (issues.length === 0) {
+                diagHtml = `<div class="bg-emerald-50 border border-emerald-200 text-emerald-700 p-3 rounded-xl flex items-start gap-2 shadow-sm">
+                    <i class="fa-solid fa-check-circle mt-0.5 text-lg"></i>
+                    <div>
+                        <strong class="block text-sm">Bacaan Lancar</strong>
+                        <span class="text-xs">Tiada masalah kritikal dikesan. Pelajar mempunyai kelancaran dan fokus yang cemerlang.</span>
+                    </div>
+                </div>`;
+            } else {
+                diagHtml = issues.map(i => {
+                    const colors = i.type === 'danger' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-amber-50 text-amber-800 border-amber-200';
+                    const iconColor = i.type === 'danger' ? 'text-red-500' : 'text-amber-500';
+                    return `<div class="mb-2 p-3 rounded-xl border flex items-start gap-3 shadow-sm ${colors}">
+                        <i class="fa-solid ${i.icon} ${iconColor} mt-0.5 text-lg"></i> 
+                        <span class="text-xs leading-relaxed font-medium">${i.text}</span>
+                    </div>`;
+                }).join('');
+            }
+            
+            document.getElementById('diagnostic-result').innerHTML = diagHtml;
+        }
+        
+        btnEnd.addEventListener('click', endSession);
+
+        // --- Init MediaPipe ---
+        initText();
+        const faceMesh = new FaceMesh({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }});
+        
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true, // IMPORTANT: Enables Iris tracking internally
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+        });
+        faceMesh.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await faceMesh.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        
+        setTimeout(() => {
+            camera.start().catch(err => {
+                log(`Ralat Kamera: ${err.message}`);
+                alert("Sila benarkan akses kamera.");
+            });
+        }, 1000);
+
+    </script>
+</body>
+</html>
